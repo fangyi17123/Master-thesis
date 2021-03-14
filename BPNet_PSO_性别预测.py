@@ -1,124 +1,347 @@
+
+
+
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Feb 22 09:30:10 2021
+
+@author: 92102
+"""
+import random
 import numpy as np
-import matplotlib.pyplot as plt
+import pandas as pd
+import scipy.stats as stats
+import math
+from matplotlib import pyplot as plt
+import os
+import sys
+from sklearn.metrics import mean_squared_error #均方误差
+from sklearn.metrics import mean_absolute_error #平方绝对误差
+from sklearn.metrics import r2_score#R square
 
-# 中文、负号
-plt.rcParams['font.sans-serif'] = ['SimHei']
-plt.rcParams['axes.unicode_minus'] = False
 
-#数据集
-x1 = [0.697,0.774,0.634,0.608,0.556,0.403,0.481,0.437,0.666,0.243,0.245,0.343,0.639,0.657,0.360,0.593,0.719]
-x2 = [0.460,0.376,0.264,0.318,0.215,0.237,0.149,0.211,0.091,0.267,0.057,0.099,0.161,0.198,0.370,0.042,0.103]
-y = [1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0]
+train_batch_size = 30#训练批次
+test_batch_size = 50#测试批次
+num_iterations = 1000
+lr = 0.002#学习率
+weight_decay = 0.002#权重更新
+num_neuron=50#隐藏层节点数
+file_dir = os.path.dirname(__file__)
+sys.path.append(file_dir)
+momentum = 0.6
+iteration = -1
+gamma = 0.0005
+power = 0.75
+train_error = []
+max_loss = math.inf
+early_stopping_iter = 35
+early_stopping_mark = 0
 
-#数据提取,np.r_是按列连接两个矩阵，就是把两矩阵上下相加，要求列数相等。np.c_是按行连接两个矩阵，就是把两矩阵左右相加，要求行数相等。
-x = np.c_[x1,x2]
+class Initializer:
+    def __init__(self,batch_size):
+        self.data_sample = 0
+        self.data_label = 0
+        self.output_sample = 0
+        self.output_label = 0
+        self.point = 0  # 用于记住下一次pull数据的地方;
+        self.batch_size = batch_size
 
-# 数据预处理
-def preProcess(x,y):
-    # 特征缩放(标准化)
-    x -= np.mean(x,0)
-    x /= np.std(x,0,ddof=1)
+    def get_data(self, sample, label): 
+        self.data_sample = sample
+        self.data_label = label
 
-    # 数据初始化
-    x = np.c_[np.ones(len(x)),x]
-    y = np.c_[y]
-    return x,y
+    def shuffle(self):  
+        random_sequence = random.sample(range(self.data_sample.shape[0]), self.data_sample.shape[0])
+        self.data_sample = self.data_sample[random_sequence]
+        self.data_label = self.data_label[random_sequence]
 
-#调用预处理函数
-x,y = preProcess(x,y)
+    def pull_data(self):  
+        start = self.point
+        end = start + self.batch_size
+        output_index = np.arange(start, end)
+        if end > self.data_sample.shape[0]:
+            end = end - self.data_sample.shape[0]
+            output_index = np.append(np.arange(start, self.data_sample.shape[0]), np.arange(0, end))
+        self.output_sample = self.data_sample[output_index]
+        self.output_label = self.data_label[output_index]
+        self.point = end % self.data_sample.shape[0]
+        
+    
+    def xavier(self, num_neuron_inputs, num_neuron_outputs):
+        temp1 = np.sqrt(6) / np.sqrt(num_neuron_inputs + num_neuron_outputs + 1)
+        weights = stats.uniform.rvs(-temp1, 2 * temp1, (num_neuron_inputs, num_neuron_outputs))
+        return weights
 
-# 洗牌
-np.random.seed(7)
-order = np.random.permutation(len(x))
-x = x[order]
-y = y[order]
 
-#数据集切分(train/test)
-train_x,test_x = np.split(x,[int(0.7*len(x))])
-train_y,test_y = np.split(y,[int(0.7*len(x))])
+    
+class Optimizer():
+    #优化策略
+    def __init__(self, lr, momentum, iteration, gamma, power):#初始化
+        self.lr = lr
+        self.momentum = momentum
+        self.iteration = iteration
+        self.gamma = gamma
+        self.power = power
+    
 
-# 正向传播算法
-# 激活函数(逻辑函数)
-def g(z,deriv=False):
-    if deriv:
-        return z*(1-z)
-    return 1/(1+np.exp(-z))
+    def anneling(self):
+        if self.iteration == -1:
+            assert False, '需要在训练过程中,改变update_method 模块里的 iteration 的值'
+        self.lr = self.lr * np.power((1 + self.gamma * self.iteration), -self.power)
+        return self.lr
 
-# 定义模型
-def model(x,theta1,theta2,theta3):
-    z2 = np.dot(x,theta1)
-    a2 = g(z2)
-    z3 = np.dot(a2, theta2)
-    a3 = g(z3)
-    z4 = np.dot(a3, theta3)
-    a4 = g(z4)
-    return a2,a3,a4
+    def batch_gradient_descent_anneling(self, weights, grad_weights, previous_direction):
+        self.lr = self.anneling()
+        direction = self.momentum * previous_direction + self.lr * grad_weights
+        weights_now = weights - direction
+        return (weights_now, direction)
 
-# 代价函数
-def costFunc(h,y):
-    j = (-1/len(y))*np.sum(y*np.log(h) + (1-y)*np.log(1-h))
-    return j
+    def update_iteration(self, iteration):
+        self.iteration = iteration
 
-# 向后传播(BP算法)
-def BP(a1,a2,a3,a4,theta1,theta2,theta3,alpha,y):
-    # 求delta值
-    delta4 = a4 - y
-    delta3 = np.dot(delta4,theta3.T)*g(a3,True)
-    delta2 = np.dot(delta3,theta2.T)*g(a2,True)
 
-    # 求deltaTheta
-    deltatheta3 = (1/len(y))*np.dot(a3.T,delta4)
-    deltatheta2 = (1/len(y))*np.dot(a2.T,delta3)
-    deltatheta1 = (1/len(y))*np.dot(a1.T,delta2)
 
-    # 更新theta
-    theta1 -= alpha*deltatheta1
-    theta2 -= alpha*deltatheta2
-    theta3 -= alpha*deltatheta3
-    return theta1,theta2,theta3
 
-# 梯度下降函数
-def gradDesc(x,y,alpha=0.7,max_iter=10000,hidden_layer_size=(17,8)):
-    m,n = x.shape
-    k = y.shape[1]
 
-    # 初始化theta
-    theta1 = 2 * np.random.rand(n,hidden_layer_size[0]) - 1
-    theta2 = 2 * np.random.rand(hidden_layer_size[0],hidden_layer_size[1]) - 1
-    theta3 = 2 * np.random.rand(hidden_layer_size[1],k) - 1
+class Loss():
+    #损失函数
+    def __init__(self, loss_function_name):
+        self.inputs = 0
+        self.loss = 0
+        self.grad_inputs = 0
+        if loss_function_name == 'LeastSquareLoss':
+            self.loss_function = self.least_square_loss
+            self.der_loss_function = self.der_least_square_loss
+        else:
+            print("wrong loss function")
+    
+    def get_label_for_loss(self, label):
+        self.label = label
 
-    # 初始化代价
-    j_history = np.zeros(max_iter)
+    def get_inputs_for_loss(self, inputs):
+        self.inputs = inputs
 
-    for i in range(max_iter):
-        # 求预测值
-        a2, a3, a4 = model(x,theta1,theta2,theta3)
-        # 记录代价
-        j_history[i] = costFunc(a4,y)
-        # 反向传播，更新参数
-        theta1, theta2, theta3 = BP(x, a2, a3, a4, theta1, theta2, theta3, alpha, y)
-    return j_history,theta1, theta2, theta3
+    def compute_loss(self):
+        self.loss = self.loss_function(self.inputs, self.label)
 
-#调用梯度下降函数
-j_history,theta1, theta2, theta3 = gradDesc(train_x,train_y)
+    def compute_gradient(self):
+        self.grad_inputs = self.der_loss_function(self.inputs, self.label)
 
-#训练集预测值
-train_a2,train_a3,train_h = model(train_x,theta1, theta2, theta3)
-#预测结果标签
-test_a2,test_a3,test_h = model(test_x,theta1, theta2, theta3)
+    def least_square_loss(self, predict, label):
+        tmp1 = np.sum(np.square(label - predict), 1)
+        loss = np.mean(tmp1)
+        return loss
 
-#定义准确率
-def score(h,y):
-    count = 0
-    for i in range(len(y)):
-        if np.where(h[i] >= 0.5,1,0) == y[i]:
-            count += 1
-    return count/len(y)
+    def der_least_square_loss(self, predict, label):
+        gradient = predict - label
+        return gradient
 
-print('训练集准确率:',score(train_h,train_y))
-print('测试集准确率:',score(test_h,test_y))
+class Activation():
+    #激活层
+    def __init__(self, activation_function_name):
+        if activation_function_name == 'sigmoid':
+            self.activation_function = self.sigmoid
+            self.der_activation_function = self.der_sigmoid
+        else:
+            print('wrong activation function')
+        self.inputs = 0
+        self.outputs = 0
+        self.grad_inputs = 0
+        self.grad_outputs = 0
 
-# 画图
-plt.title('代价函数图像')
-plt.plot(j_history)
-plt.show()
+    def get_inputs_for_forward(self, inputs):
+        self.inputs = inputs
+
+    def forward(self):
+        self.outputs = self.activation_function(self.inputs)
+
+    def get_inputs_for_backward(self, grad_outputs):
+        self.grad_outputs = grad_outputs
+
+    def backward(self):
+        self.grad_inputs = self.grad_outputs * self.der_activation_function(self.inputs)
+
+    def relu(self, x):
+        temp = np.zeros_like(x)
+        if_bigger_zero = (x > temp)
+        return x * if_bigger_zero
+
+    def der_relu(self, x):
+        temp = np.zeros_like(x)
+        if_bigger_equal_zero = (x >= temp)  # 在零处的导数设为1
+        return if_bigger_equal_zero * np.ones_like(x)
+    
+    # sigmoid函数及其导数的定义
+    def sigmoid(self, x):
+        return 1 / (1 + np.exp(-x))
+
+    def der_sigmoid(self, x):
+        return self.sigmoid(x) * (1 - self.sigmoid(x))
+
+
+
+class Netstructure():
+    #全连接层
+    def __init__(self, num_neuron_inputs, num_neuron_outputs, batch_size,weights_decay=weight_decay):
+        self.num_neuron_inputs = num_neuron_inputs
+        self.num_neuron_outputs = num_neuron_outputs
+        self.inputs = np.zeros((batch_size, num_neuron_inputs))
+        self.outputs = np.zeros((batch_size, num_neuron_outputs))
+        self.weights = np.zeros((num_neuron_inputs, num_neuron_outputs))
+        self.bias = np.zeros(num_neuron_outputs)
+        self.weights_previous_direction = np.zeros((num_neuron_inputs, num_neuron_outputs))
+        self.bias_previous_direction = np.zeros(num_neuron_outputs)
+        self.grad_weights = np.zeros((batch_size, num_neuron_inputs, num_neuron_outputs))
+        self.grad_bias = np.zeros((batch_size, num_neuron_outputs))
+        self.grad_inputs = np.zeros((batch_size, num_neuron_inputs))
+        self.grad_outputs = np.zeros((batch_size, num_neuron_outputs))
+        self.batch_size = batch_size
+        self.weights_decay = weights_decay
+
+    def initialize_weights(self, initializer):
+        self.weights = initializer(self.num_neuron_inputs, self.num_neuron_outputs)
+
+
+    def get_inputs_for_forward(self, inputs):
+        self.inputs = inputs
+
+    def forward(self):
+        self.outputs = self.inputs.dot(self.weights)+ np.tile(self.bias, (self.batch_size, 1))#怀疑偏置加的过早？
+
+    # 在反向传播过程中,用于获取输入;
+    def get_inputs_for_backward(self, grad_outputs):
+        self.grad_outputs = grad_outputs
+
+    def backward(self):
+        for i in np.arange(self.batch_size):
+            self.grad_weights[i, :] = np.tile(self.inputs[i, :], (1, 1)).T.dot(np.tile(self.grad_outputs[i, :], (1, 1))) + \
+            self.weights * self.weights_decay
+        self.grad_bias = self.grad_outputs
+        self.grad_inputs = self.grad_outputs.dot(self.weights.T)
+
+    def update(self, optimizer):
+        grad_weights_average = np.mean(self.grad_weights, 0)
+        grad_bias_average = np.mean(self.grad_bias, 0)
+        (self.weights, self.weights_previous_direction) = optimizer(self.weights, grad_weights_average,self.weights_previous_direction)
+        (self.bias, self.bias_previous_direction) = optimizer(self.bias,grad_bias_average, self.bias_previous_direction)
+
+    def update_batch_size(self,batch_size):
+        self.batch_size = batch_size
+
+class BPNet():
+    #BP网络
+    def __init__(self, optimizer = Optimizer.batch_gradient_descent_anneling, initializer = Initializer.xavier, \
+                 batch_size=train_batch_size, num_neuron=num_neuron,weights_decay=weight_decay):
+        self.optimizer = optimizer
+        self.initializer = initializer
+        self.batch_size = batch_size
+        self.weights_decay = weights_decay
+        self.fc1 = Netstructure(7,num_neuron,self.batch_size, self.weights_decay)
+        self.ac1 = Activation('sigmoid')
+        self.fc2 = Netstructure(num_neuron,1,self.batch_size, self.weights_decay)
+        self.loss = Loss("LeastSquareLoss")
+
+    def forward_train(self,input_data, input_label):
+        self.fc1.get_inputs_for_forward(input_data)
+        self.fc1.forward()
+        self.ac1.get_inputs_for_forward(self.fc1.outputs)
+        self.ac1.forward()
+        self.fc2.get_inputs_for_forward(self.ac1.outputs)
+        self.fc2.forward()
+
+        self.loss.get_inputs_for_loss(self.fc2.outputs)
+        self.loss.get_label_for_loss(input_label)
+        self.loss.compute_loss()
+
+    def backward_train(self):
+        self.loss.compute_gradient()
+        self.fc2.get_inputs_for_backward(self.loss.grad_inputs)
+        self.fc2.backward()
+        self.ac1.get_inputs_for_backward(self.fc2.grad_inputs)
+        self.ac1.backward()
+        self.fc1.get_inputs_for_backward(self.ac1.grad_inputs)
+        self.fc1.backward()
+
+    def predict(self,input_data):
+        self.fc1.get_inputs_for_forward(input_data)
+        self.fc1.forward()
+        self.ac1.get_inputs_for_forward(self.fc1.outputs)
+        self.ac1.forward()
+
+        self.fc2.get_inputs_for_forward(self.ac1.outputs)
+        self.fc2.forward()
+        return self.fc2.outputs
+
+    def eval(self,input_data, input_label):
+        self.fc1.update_batch_size(input_data.shape[0])
+        self.fc1.get_inputs_for_forward(input_data)
+        self.fc1.forward()
+        self.ac1.get_inputs_for_forward(self.fc1.outputs)
+        self.ac1.forward()
+        self.fc2.update_batch_size(input_data.shape[0])
+        self.fc2.get_inputs_for_forward(self.ac1.outputs)
+        self.fc2.forward()
+        print('mae:',mean_absolute_error(input_label,self.fc2.outputs))
+        print('mse:',mean_squared_error(input_label,self.fc2.outputs))
+        print('rsquared:',r2_score(input_label,self.fc2.outputs))
+        
+
+    def update(self):
+        self.fc1.update(self.optimizer)
+        self.fc2.update(self.optimizer)
+
+    def initial(self):
+        self.fc1.initialize_weights(self.initializer)
+        self.fc2.initialize_weights(self.initializer)
+        
+if __name__ == "__main__":
+    #主函数入口
+    sales_forecast_data = pd.read_excel("性别预测原始数据.xlsx")
+
+    data_sample = sales_forecast_data.iloc[:, :-1].values
+    data_label = sales_forecast_data.iloc[:, -1].values.reshape(-1,1)
+
+    mean = data_sample.mean(axis=0)
+    std = data_sample.std(axis=0)
+    data_sample = (data_sample-mean)/std
+
+    data_length = data_label.shape[0]
+    train_data_length = int(data_length * 0.8)
+    
+    data_sample_train, data_sample_test = data_sample[:train_data_length], data_sample[train_data_length:]
+    data_label_train, data_label_test = data_label[:train_data_length], data_label[train_data_length:]
+    
+
+
+    initializer = Initializer(train_batch_size)
+    opt = Optimizer(lr,momentum,iteration,gamma,power)
+    
+    initializer.get_data(sample=data_sample_train,label=data_label_train)
+    initializer.shuffle()
+    
+    bpnet = BPNet(optimizer = opt.batch_gradient_descent_anneling, initializer = initializer.xavier, batch_size = train_batch_size, \
+                weights_decay = weight_decay)
+    bpnet.initial()
+    
+
+    
+    for i in range(num_iterations):
+        opt.update_iteration(i)
+        initializer.pull_data()
+        bpnet.forward_train(initializer.output_sample,initializer.output_label)
+        bpnet.backward_train()
+        bpnet.update()
+        train_error.append(bpnet.loss.loss)
+        if max_loss >  bpnet.loss.loss:
+            early_stopping_mark = 0
+            max_loss = bpnet.loss.loss
+        if early_stopping_mark > early_stopping_iter:
+            break
+        early_stopping_mark += 1
+    
+    # 绘制误差曲线
+    plt.plot(train_error)
+    plt.show()
+    
+        #测试
+    bpnet.eval(data_sample_test,data_label_test)
