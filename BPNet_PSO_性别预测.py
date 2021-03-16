@@ -11,6 +11,111 @@ import numpy as np
 import scipy.stats as stats
 import random
 
+
+
+
+class Particle:
+    # 初始化
+    def __init__(self, x_max, vel_max, dim):
+        self.__pos = [random.uniform(-x_max, x_max) for i in range(dim)]  # 粒子的位置
+        self.__vel = [random.uniform(-vel_max, vel_max) for i in range(dim)]  # 粒子的速度
+        self.__bestPos = [0.0 for i in range(dim)]  # 粒子最好的位置
+        self.__fitnessValue = fit_fun(self.__pos)  # 适应度函数值
+
+    def set_pos(self, i, value):
+        self.__pos[i] = value
+
+    def get_pos(self):
+        return self.__pos
+
+    def set_PbestPosition(self, i, value):
+        self.__bestPos[i] = value
+
+    def get_PbestPosition(self):
+        return self.__bestPos
+
+    def set_vel(self, i, value):
+        self.__vel[i] = value
+
+    def get_vel(self):
+        return self.__vel
+
+    def set_PbestFitnessValue(self, value):
+        self.__fitnessValue = value
+
+    def get_PbestFitnessValue(self):
+        return self.__fitnessValue
+
+
+class PSO:
+    def __init__(self, dim, size, iter_num, x_max, vel_max, best_fitness_value=float('Inf'), C1=2, C2=2, W=1):
+        self.C1 = C1
+        self.C2 = C2
+        self.W = W#惯性权重
+        self.dim = dim  # 粒子的维度
+        self.size = size  # 粒子个数
+        self.iter_num = iter_num  # 迭代次数
+        self.x_max = x_max#当前位置
+        self.vel_max = vel_max  # 粒子最大速度
+        self.best_fitness_value = best_fitness_value
+        self.best_position = [0.0 for i in range(dim)]  # 种群最优位置
+        self.fitness_val_list = []  # 每次迭代最优适应值
+
+        # 对种群进行初始化
+        self.Particle_list = [Particle(self.x_max, self.vel_max, self.dim) for i in range(self.size)]
+
+    def set_GbestFitnessValue(self, value):
+        self.best_fitness_value = value
+
+    def get_GbestFitnessValue(self):
+        return self.best_fitness_value
+
+    def set_GbestPosition(self, i, value):
+        self.best_position[i] = value
+
+    def get_GbestPosition(self):
+        return self.best_position
+
+    # 更新速度
+    def update_vel(self, part):
+        for i in range(self.dim):
+            vel_value = self.W * part.get_vel()[i] + self.C1 * random.random() * (part.get_PbestPosition()[i] - \
+                    part.get_pos()[i]) + self.C2 * random.random() * (self.get_GbestPosition()[i] - part.get_pos()[i])
+            if vel_value > self.vel_max:
+                vel_value = self.vel_max
+            elif vel_value < -self.vel_max:
+                vel_value = -self.vel_max
+            part.set_vel(i, vel_value)
+
+    # 更新位置
+    def update_pos(self, part):
+        for i in range(self.dim):
+            pos_value = part.get_pos()[i] + part.get_vel()[i]
+            part.set_pos(i, pos_value)
+        value = fit_fun(part.get_pos())
+        if value < part.get_PbestFitnessValue():
+            part.set_PbestFitnessValue(value)
+            for i in range(self.dim):
+                part.set_PbestPosition(i, part.get_pos()[i])
+        if value < self.get_GbestFitnessValue():
+            self.set_GbestFitnessValue(value)
+            for i in range(self.dim):
+                self.set_GbestPosition(i, part.get_pos()[i])
+
+
+    def update(self,fc1_weights,fc1_bias,fc2_weights,fc2_bias,train_error):
+        
+        for i in range(self.iter_num):
+            for part in self.Particle_list:
+                self.update_vel(part)  # 更新速度
+                self.update_pos(part)  # 更新位置
+            self.fitness_val_list.append(self.get_GbestFitnessValue())  # 每次迭代完把当前的最优适应度存到列表
+            train_error.append(self.get_GbestFitnessValue())  # 每次迭代完把当前的最优适应度存到列表
+            fc1_weights = np.reshape(np.array((self.get_GbestPosition())[0:nSampDim*nHidden]),(nSampDim,nHidden))
+            fc1_bias = np.reshape(np.array( (self.get_GbestPosition())[nSampDim*nHidden:((nSampDim+1)*nHidden)]),(nHidden,))
+            fc2_weights = np.reshape(np.array((self.get_GbestPosition())[((nSampDim+1)*nHidden):(((nSampDim+1)*nHidden)+nHidden*nOut)]),(nHidden,nOut))
+            fc2_bias=np.reshape(np.array((self.get_GbestPosition())[(nSampDim+1)*nHidden+nHidden*nOut:(nSampDim+1)*nHidden+(nHidden+1)*nOut]),(nOut,))
+    
 class Initializer():
     # xavier 初始化方法
     def xavier(self, num_neuron_inputs, num_neuron_outputs):
@@ -63,33 +168,8 @@ class MetricCalculator:
 
 
 
-class LossFunction():
+class LossFunction:
     # SoftmaxWithLoss函数及其导数的定义
-    def softmax_logloss(self, inputs, label):
-        temp1 = np.exp(inputs)
-        probability = temp1 / (np.tile(np.sum(temp1, 1), (inputs.shape[1], 1))).T
-        temp3 = np.argmax(label, 1)  # 纵坐标
-        temp4 = [probability[i, j] for (i, j) in zip(np.arange(label.shape[0]), temp3)]
-        loss = -1 * np.mean(np.log(temp4))
-        return loss
-
-    def der_softmax_logloss(self, inputs, label):
-        temp1 = np.exp(inputs)
-        temp2 = np.sum(temp1, 1)  # 它得到的是一维的向量;
-        probability = temp1 / (np.tile(temp2, (inputs.shape[1], 1))).T
-        gradient = probability - label
-        return gradient
-
-    def sigmoid_logloss(self, inputs, label):
-        probability = np.array([(1.0 / (1 + np.exp(-i))) for i in inputs])
-        loss = - np.sum(np.dot(label.T,np.log(probability)+ np.dot((1-label).T,np.log(1-probability)))) / ( len(label))
-        return loss
-
-    def der_sigmoid_logloss(self, inputs, label):
-        probability = np.array([(1.0 / (1 + np.exp(-i))) for i in inputs])
-        gradient = label - probability
-        return gradient
-
     def least_square_loss(self, predict, label):
         tmp1 = np.sum(np.square(label - predict), 1)
         loss = np.mean(tmp1)
@@ -101,16 +181,12 @@ class LossFunction():
 
 
 class Losslayer():
-    #损失层
     def __init__(self, loss_function_name):
         self.lossfunc = LossFunction()
         self.inputs = 0
         self.loss = 0
         self.grad_inputs = 0
-        if loss_function_name == 'SoftmaxLogloss':
-            self.loss_function = self.lossfunc.softmax_logloss
-            self.der_loss_function = self.lossfunc.der_softmax_logloss
-        elif loss_function_name == 'LeastSquareLoss':
+        if loss_function_name == 'LeastSquareLoss':
             self.loss_function = self.lossfunc.least_square_loss
             self.der_loss_function = self.lossfunc.der_least_square_loss
         else:
@@ -126,7 +202,7 @@ class Losslayer():
 
     def compute_gradient(self):
         self.grad_inputs = self.der_loss_function(self.inputs, self.label)
-
+        
 class ActivationFunction():
     def __init__(self):
         pass
@@ -137,31 +213,6 @@ class ActivationFunction():
     def der_sigmoid(self, x):
         return self.sigmoid(x) * (1 - self.sigmoid(x))
 
-    # tanh函数及其导数的定义
-    def tanh(self, x):
-        return (np.exp(x) - np.exp(-x)) / (np.exp(x) + np.exp(-x))
-
-    def der_tanh(self, x):
-        return 1 - self.tanh(x) * self.tanh(x)
-
-    # ReLU函数及其导数的定义
-    def relu(self, x):
-        temp = np.zeros_like(x)
-        if_bigger_zero = (x > temp)
-        return x * if_bigger_zero
-
-    def der_relu(self, x):
-        temp = np.zeros_like(x)
-        if_bigger_equal_zero = (x >= temp)  # 在零处的导数设为1
-        return if_bigger_equal_zero * np.ones_like(x)
-
-    # Identity函数及其导数的定义
-    def identity(self, x):
-        return x
-
-    def der_identity(self, x):
-        return x
-
 class ActivationLayer():
     #激活层
     def __init__(self, activation_function_name):
@@ -169,15 +220,6 @@ class ActivationLayer():
         if activation_function_name == 'sigmoid':
             self.activation_function = self.actfunc.sigmoid
             self.der_activation_function = self.actfunc.der_sigmoid
-        elif activation_function_name == 'tanh':
-            self.activation_function = self.actfunc.tanh
-            self.der_activation_function = self.actfunc.der_tanh
-        elif activation_function_name == 'relu':
-            self.activation_function = self.actfunc.relu
-            self.der_activation_function = self.actfunc.der_relu
-        elif activation_function_name == 'linear':
-            self.activation_function = self.actfunc.identity
-            self.der_activation_function = self.actfunc.der_identity
         else:
             print('wrong activation function')
         self.inputs = 0
@@ -199,7 +241,7 @@ class ActivationLayer():
 
 class FullyConnectedlayer():
     #全连接层
-    def __init__(self, num_neuron_inputs, num_neuron_outputs, batch_size=16,weights_decay=0.001):
+    def __init__(self, num_neuron_inputs, num_neuron_outputs, batch_size,weights_decay):
         self.num_neuron_inputs = num_neuron_inputs
         self.num_neuron_outputs = num_neuron_outputs
         self.inputs = np.zeros((batch_size, num_neuron_inputs))
@@ -245,8 +287,10 @@ class FullyConnectedlayer():
         grad_bias_average = np.mean(self.grad_bias, 0)
         (self.weights, self.weights_previous_direction) = optimizer(self.weights, grad_weights_average,\
                                             self.weights_previous_direction)
-        (self.bias, self.bias_previous_direction) = optimizer(self.bias,grad_bias_average, self.bias_previous_direction)
+        (self.bias, self.bias_previous_direction) = optimizer(self.bias,grad_bias_average, \
+                                                     self.bias_previous_direction)
 
+    
     def update_batch_size(self,batch_size):
         self.batch_size = batch_size
 
@@ -258,9 +302,6 @@ class Optimizer():
         self.iteration = iteration
         self.gamma = gamma
         self.power = power
-    # 固定方法
-    def fixed(self):
-        return self.lr
 
     # inv方法
     def anneling(self):
@@ -268,12 +309,6 @@ class Optimizer():
             assert False, '需要在训练过程中,改变update_method 模块里的 iteration 的值'
         self.lr = self.lr * np.power((1 + self.gamma * self.iteration), -self.power)
         return self.lr
-
-    # 基于批量的随机梯度下降法
-    def batch_gradient_descent_fixed(self, weights, grad_weights, previous_direction):
-        direction = self.momentum * previous_direction + self.lr * grad_weights
-        weights_now = weights - direction
-        return (weights_now, direction)
 
     def batch_gradient_descent_anneling(self, weights, grad_weights, previous_direction):
         self.lr = self.anneling()
@@ -286,15 +321,19 @@ class Optimizer():
 
 
 class BPNet():
-    def __init__(self, optimizer,initializer,batch_size,weights_decay):          
+    def __init__(self, batch_size,weights_decay,optimizer,initializer,nSampDim,nHidden,nOut):          
         self.optimizer = optimizer
         self.initializer = initializer
         self.batch_size = batch_size
+        self.nSampDim=nSampDim
+        self.nHidden = nHidden
+        self.nOut = nOut
         self.weights_decay = weights_decay
-        self.fc1 = FullyConnectedlayer(7,16,self.batch_size, self.weights_decay)
+        self.fc1 = FullyConnectedlayer(self.nSampDim,self.nHidden,self.batch_size, self.weights_decay)
         self.ac1 = ActivationLayer('sigmoid')
-        self.fc2 = FullyConnectedlayer(16,1,self.batch_size, self.weights_decay)
+        self.fc2 = FullyConnectedlayer(self.nHidden,self.nOut,self.batch_size, self.weights_decay)
         self.loss = Losslayer("LeastSquareLoss")
+        
 
     def forward_train(self,input_data, input_label):
         self.fc1.get_inputs_for_forward(input_data)
@@ -304,11 +343,11 @@ class BPNet():
         self.fc2.get_inputs_for_forward(self.ac1.outputs)
         self.fc2.forward()
 
-        #print("predict label: \n ", np.concatenate((self.fc2.outputs[:10], input_label[:10]), axis=1))
+        print("predict label: \n ", np.concatenate((self.fc2.outputs[:10], input_label[:10]), axis=1))
         self.loss.get_inputs_for_loss(self.fc2.outputs)
         self.loss.get_label_for_loss(input_label)
         self.loss.compute_loss()
-        #print("loss: ",self.loss.loss)
+        print("loss: ",self.loss.loss)
 
 
     def backward_train(self):
@@ -351,12 +390,11 @@ class BPNet():
     def update(self):
         self.fc1.update(self.optimizer)
         self.fc2.update(self.optimizer)
+        
 
     def initial(self):
         self.fc1.initialize_weights(self.initializer)
         self.fc2.initialize_weights(self.initializer)
-        print('fc1:',self.fc1.initialize_weights(self.initializer))
-        print('fc2:',self.fc2.initialize_weights(self.initializer))
 
 class DataHander():
     #数据预处理
@@ -391,6 +429,30 @@ class DataHander():
 if __name__ == "__main__": 
     #程序入口
     
+    #初始化参数设置
+    num_iterations = 1000#迭代次数
+    lr = 0.001#学习率
+    weight_decay = 0.01#权值衰减
+    train_batch_size = 12#训练批次
+    test_batch_size = 100
+    train_error = []
+    max_loss = math.inf
+    early_stopping_iter = 15
+    early_stopping_mark = 0 
+    momentum = 0.9
+    iteration = 0
+    gamma = 0.0005
+    power = 0.75
+    nSampDim = 7      # 样本维度，输入层神经元个数
+    nHidden = 28      # 隐含层神经元个数
+    nOut = 1           # 输出层神经元个数
+    dim = (nSampDim+1)*nHidden+(nHidden+1)*nOut   #粒子维度
+    size = 10    #粒子个数
+    iter_num = 20   #PSO迭代次数
+    x_max = 10      #位置极值
+    vel_max = 0.5    #速度极值
+
+    
     #读取数据
     gender_prediction_data = pd.read_excel("性别预测原始数据.xlsx")
     print("data_shape:", gender_prediction_data.shape)
@@ -410,28 +472,32 @@ if __name__ == "__main__":
     data_sample_train, data_sample_test = data_sample[:train_data_length], data_sample[train_data_length:]
     data_label_train, data_label_test = data_label[:train_data_length], data_label[train_data_length:]
     
-    #初始化参数设置
-    num_iterations = 1000#迭代次数
-    lr = 0.001#学习率
-    weight_decay = 0.01#权值衰减
-    train_batch_size = 16#批次
-    test_batch_size = 100
-    data_handler = DataHander(train_batch_size)
-    opt = Optimizer(lr = lr,momentum = 0.9,iteration = 0,gamma = 0.0005,power = 0.75)
+
     
-    #初始化神经网络权重
-    initializer = Initializer()
+    opt = Optimizer(lr,momentum,iteration,gamma,power)
     
-    data_handler.get_data(sample=data_sample_train,label=data_label_train)
+    data_handler = DataHander(train_batch_size)    
+    data_handler.get_data(data_sample_train,data_label_train) 
     data_handler.shuffle()
     
-    bpn = BPNet(optimizer = opt.batch_gradient_descent_anneling, initializer = initializer.xavier, batch_size = 16,\
-                weights_decay = 0.001)
+    initializer = Initializer()
+    
+    bpn = BPNet(train_batch_size,weight_decay,opt.batch_gradient_descent_anneling,initializer.xavier,\
+                nSampDim,nHidden,nOut )
     bpn.initial()
-    train_error = []
-    max_loss = math.inf
-    early_stopping_iter = 15
-    early_stopping_mark = 0
+    
+    
+    def fit_fun(X):  # 适应函数
+        data_handler.pull_data()
+        bpn.forward_train(data_handler.output_sample,data_handler.output_label)
+        return bpn.loss.loss
+    
+    #PSO求解
+    pso = PSO(dim, size, iter_num, x_max, vel_max)
+    pso.update(bpn.fc1.weights,bpn.fc1.bias,bpn.fc2.weights,bpn.fc2.bias,train_error)
+    
+    
+    #BP求解
     for i in range(num_iterations):
         #print('第', i, '次迭代')
         opt.update_iteration(i)
@@ -439,6 +505,7 @@ if __name__ == "__main__":
         bpn.forward_train(data_handler.output_sample,data_handler.output_label)
         bpn.backward_train()
         bpn.update()
+        
         train_error.append(bpn.loss.loss)
         if max_loss >  bpn.loss.loss:
             early_stopping_mark = 0
@@ -446,8 +513,12 @@ if __name__ == "__main__":
         if early_stopping_mark > early_stopping_iter:
             break
         early_stopping_mark += 1
+    
+    # 绘制误差曲线
     plt.plot(train_error)
     plt.show()
     
     #测试
     bpn.eval(data_sample_test,data_label_test)
+    
+    
